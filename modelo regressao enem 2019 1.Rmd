@@ -1,0 +1,323 @@
+---
+title: Aplicado modelos de Regressão Linear Simples e Múltipla com Microdados do Enem
+  2019
+Author: Adauto de Galiza
+output:
+  word_document: default
+  html_document: default
+---
+## CORRELAÇÃO DE PEARSON E REGRESSÃO LINEAR
+
+OBJETIVO: Identificar força de associação e criar um modelo que possa prever a nota de redação (VD) com base nas notas de linguagens e códigos, matemática, ciências humanas e naturais (VI's) para um colégio aleatório.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+#Importando Base de dados e bibliotecas
+vestibulando_presente <- read.csv("vestibulando_pi_presente.csv", sep = ",")
+library(dplyr)
+library(nortest) #testes de normalidade
+library(corrplot)
+library(lmtest) # bp.test
+library(car) #VIF e etc
+library(ggplot2)
+library(ggpubr) # inserção de retas de regressão no ggplot
+library(performance) 
+```
+### Sobre o dataset:
+Por motivos de restrição computacional, filtrei as notas do Enem apenas para um Estado (Piauí), além de ter desconsiderados os "treineiros" (alunos que fazem a prova apenas como treinamento). Salvei o output em novo arquivo .csv localmente para utilizar em diversas outras análises, e por isto toda a parte de pré-processamento dos dados não consta neste relatório.
+
+A base possui a seguinte estrutura.
+
+```{r echo=FALSE}
+head(vestibulando_presente)
+```
+
+### CORRELAÇÃO DE PEARSON: aplicada apenas para dados normalizados quantitativos
+```{r}
+# Filtrando a base por um colégio aleatório do Estado em questão
+
+colegiox <- vestibulando_presente %>%
+  filter(CO_ESCOLA == "22053182")
+
+### Graficamente:
+
+plot(colegiox$NOTA_LC, colegiox$NOTA_REDACAO)
+plot(colegiox$NOTA_CH, colegiox$NOTA_REDACAO)
+plot(colegiox$NOTA_CN, colegiox$NOTA_REDACAO)
+plot(colegiox$NOTA_MT, colegiox$NOTA_REDACAO)
+```
+
+Verificando o susposto de normalidade dos dados para validar a correlação:
+
+```{r}
+### NORMALIDADE: shapiro.wilk apenas n até 5000
+### Ho = distribuição normal : p > 0,05
+### Ha = distribuição não-normal : p <= 0,05
+
+shapiro.test(colegiox$NOTA_REDACAO)
+shapiro.test(colegiox$NOTA_LC)
+shapiro.test(colegiox$NOTA_CH)
+shapiro.test(colegiox$NOTA_CN)
+shapiro.test(colegiox$NOTA_MT)
+
+
+### Todas as notas apresentam normalidade
+```
+Após testada a normalidade, podemos aplicar o teste de pearson:
+
+```{r}
+## Pearson:
+## Ho = não há correlção linear : p > 0,05
+## Ho = existe correlção linear : p <= 0,05
+
+cor.test(colegiox$NOTA_LC, colegiox$NOTA_REDACAO, method = "pearson") #correlatos
+cor.test(colegiox$NOTA_CH, colegiox$NOTA_REDACAO, method = "pearson") #não-correlatos
+cor.test(colegiox$NOTA_CN, colegiox$NOTA_REDACAO, method = "pearson") #correlatos
+cor.test(colegiox$NOTA_MT, colegiox$NOTA_REDACAO, method = "pearson") #correlatos
+
+
+## RESULTADO:  Existe correlação positiva entre as variáveis (p < 0,05) de média/alta intensidade, exceto para Humanas.
+```
+
+Uma forma usual de mostrar correlações é através de uma matriz de correlação:
+
+```{r}
+## Matriz de correlação
+colegiox <- colegiox %>% relocate(NOTA_REDACAO, .after = NOTA_MT) #reordenando as colunas de interesse para aplicar no comando "cor".
+
+matrix_cor <- cor(colegiox[, c(14,17)], method = "pearson") # se quiser escolher colunas específicas
+matrix_cor <- cor(colegiox[14:18], method = "pearson")  # se quiser pegar uma sequencia de colunas
+matrix_cor
+
+corrplot(matrix_cor, method = "number", addCoef.col = T, 
+         type = "upper", tl.col = "black", tl.srt = 45, order = "hclust", diag = F) # Parametros: method = tipo de exibição (cor, circulo etc), addcoef = mostra o coeficiente, type = mostra matriz inteira, ou apenas 1 lado, tl.col = cor do eixo, tl.srt = rotação do eixo, order = colocar em ordem crescente, diag = FALSE nao mostra a diagonal com os 1's.
+```
+
+## REGRESSÃO LINEAR SIMPLES: construindo um modelo para cada par de nota
+```{r}
+
+regressao_LC <- lm(NOTA_REDACAO ~ NOTA_LC, colegiox)
+regressao_CN <- lm(NOTA_REDACAO ~ NOTA_CN, colegiox)
+regressao_CH <- lm(NOTA_REDACAO ~ NOTA_CH, colegiox)
+regressao_MT <- lm(NOTA_REDACAO ~ NOTA_MT, colegiox)
+```
+Após criação do modelo é necessário testar alguns pressupostos básicos do mesmo:
+
+```{r}
+
+### 1) Normalidade dos resíduos: p > 0,05 = resíduos normais + gráfico QQPLOT
+
+shapiro.test(regressao_LC$residuals) # há normalidade
+plot(regressao_LC) # há discrepâncias nas extremidades
+
+shapiro.test(regressao_CN$residuals) # há normalidade
+plot(regressao_CN) # ajustado
+
+shapiro.test(regressao_CH$residuals) # há normalidade
+plot(regressao_CH) # há discrepâncias na extremidades esquerda
+
+shapiro.test(regressao_MT$residuals) # há normalidade
+plot(regressao_MT) # ajustado
+```
+
+```{r}
+### 2) Ausência de outliers:
+
+boxplot(colegiox$NOTA_CH) # ok
+boxplot(colegiox$NOTA_CN) # existem
+boxplot(colegiox$NOTA_MT) # ok
+boxplot(colegiox$NOTA_LC) # existem
+boxplot(colegiox$NOTA_REDACAO) # existem
+```
+```{r}
+### 3) Homocedasticidade: gráfico residual vs fitted + bptest
+
+plot(regressao_LC) # o modelo não aparenta ser linear (influencia dos outliers)
+bptest(regressao_LC) # se p-valor > 0,05 = homocedasticidade. REPROVADO
+
+plot(regressao_CN) # o modelo aparenta ser linear (pouca influencia dos outliers)
+bptest(regressao_CN) # se p-valor > 0,05 = homocedasticidade. APROVADO
+
+plot(regressao_CH) # o modelo aparenta ser linear
+bptest(regressao_CH) # se p-valor > 0,05 = homocedasticidade. APROVADO
+
+plot(regressao_MT) # o modelo não aparenta ser linear (influencia dos outliers)
+bptest(regressao_MT) # se p-valor > 0,05 = homocedasticidade. REPROVADO
+
+### Resultado pressupostos:
+### LC e MT reprovados na homocedasticidade.
+### CN, LC e RED reprovados nos outliers.
+### Todos aprovados na normalidade dos resíduos, mas LC e CH com distorções na distribuição gráfica.
+```
+### ANALISE DESCRITIVA DOS MODELOS
+
+O p-value dá indícios se nosso coeficiente calculado possui poder explicativo dentro do modelo com significância estatística. 
+
+```{r}
+## Avaliando p-valor:
+### Ho = coeficiente estimado sem poder explicativo : p > 0,05
+### Ha = modelo válido com coeficiente explicativo : p < 0,05
+
+summary(regressao_CH) # modelo inválido
+summary(regressao_CN) # modelo válido, mas mas reprovado em OUTLIER
+summary(regressao_LC) # modelo válido, mas reprovado em HOMOCEDASTICIDADE, OUTLIER e DISCREPANCIA NORMALIDADE
+summary(regressao_MT) # modelo válido, mas reprovado em HOMOCEDASTICIDADE
+```
+## Avaliando coefienciente
+
+Os coeficientes mostram, na sua unidade original, quanto aumenta (ou diminui) a VD analisada quando temos o aumento de 1 ponto na VI. Neste caso, estamos analisando pontos em uma prova de Enem, logo a unidade de leitura destes dados é como medimos o desempenho da prova (em pontos).
+
+```{r}
+
+summary(regressao_CH) # modelo inválido
+summary(regressao_CN) # estimate(1,67) = aumento de 1 ponto em CN leva aumento (sinal positivo) em 1,67 pontos em RED.
+summary(regressao_LC) # estimate(1,76) = aumento de 1 ponto em LC leva aumento (sinal positivo) em 1,76 pontos em RED.
+summary(regressao_MT) # estimate(1,29) = aumento de 1 ponto em MT leva aumento (sinal positivo) em 1,29 pontos em RED.
+```
+## Avaliando precisão do modelo (r²)
+
+O r² indica um valor percentual do quanto a variação da VI explica as variações da VD. O percentual restante é interpretado como ruído ou variáveis alternativas que podem explicar o comportamento da VI.
+
+```{r}
+
+summary(regressao_CH) # modelo inválido
+summary(regressao_CN) # r-squared(0.3399) = a varição de CN explica 33,99% da nota de redação
+summary(regressao_LC) # r-squared(0.5347) = a varição de CN explica 53,47% da nota de redação
+summary(regressao_MT) # r-squared(0.4023) = a varição de CN explica 40,23% da nota de redação
+```
+## Construção da reta de regressão
+
+Utilizando o ggplot2 podemos criar alguns visuais para melhor representar o comportamento entre as notas analisadas.
+
+```{r}
+# Naturais
+colegiox %>%
+  ggplot(aes(x=NOTA_CN, y=NOTA_REDACAO)) +
+  theme_classic() +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", color = "black") +
+  stat_regline_equation(aes(label = paste(..eq.label.., ..adj.rr.label..,
+                                           sep = "*plain(\",\")~~")),label.x = NULL, label.y = 800)
+```
+```{r}
+# Humanas: modelo inválido 
+colegiox %>%
+  ggplot(aes(x=NOTA_CH, y=NOTA_REDACAO)) +
+  theme_classic2() +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", color = "black") +
+   stat_regline_equation( aes(label = paste(..eq.label.., ..adj.rr.label..,
+                                           sep = "*plain(\",\")~~")),label.x = NULL, label.y = 800)
+```
+```{r}
+# Matemática:  
+colegiox %>%
+  ggplot(aes(x=NOTA_MT, y=NOTA_REDACAO)) +
+  theme_classic2() +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", color = "black") +
+   stat_regline_equation( aes(label = paste(..eq.label.., ..adj.rr.label..,
+                                           sep = "*plain(\",\")~~")),label.x = NULL, label.y = 800)
+```
+```{r}
+# Linguagens:  
+colegiox %>%
+  ggplot(aes(x=NOTA_LC, y=NOTA_REDACAO)) +
+  theme_classic2() +
+  geom_point(color = "blue") +
+  geom_smooth(method = "lm", color = "black") +
+   stat_regline_equation( aes(label = paste(..eq.label.., ..adj.rr.label..,
+                                           sep = "*plain(\",\")~~")),label.x = NULL, label.y = 800)
+```
+
+## REGRESSÃO MULTIPLA
+
+Objetivo: criar um modelo com todas as notas anteriores que tente prever a nota de redação e comparar ele com o melhor modelo simples (NOTA_CN)
+```{r}
+
+regressao_multi <- lm(NOTA_REDACAO ~ NOTA_LC + NOTA_CN + NOTA_CH + NOTA_MT, colegiox)
+```
+### Verificando Pressupostos:
+```{r}
+
+## 1) Homocedasticidade: bp.test + Gráfico Residual vs Fitted
+
+plot(regressao_multi) # modelo não aparenta ser linear (outliers influenciado)
+bptest(regressao_multi) # se p-valor > 0,05. APROVADO
+```
+```{r}
+## 2) Normalidade dos resíduos + shapiro.wilk + QQPLOT:
+plot(regressao_multi) # ajustado, mas com desvios na ponta direita
+shapiro.test(regressao_multi$residuals) # se p-valor > 0,05 = normal. APROVADO
+```
+```{r}
+## 3) Ausencia de outliers nos residuos: valores min-max devem estar entre -3 e + 3
+summary(rstandard(regressao_multi)) # aprovado
+```
+```{r}
+## 4) Ausência de multicolinearidade entre VI's: VIF < 10
+
+vif(regressao_multi) # aprovado
+```
+```{r}
+## 5) Independencia dos residuos: teste durbin-watson
+
+durbinWatsonTest(regressao_multi) #  D-W ~ 2 + p-valor > 0,05 = resíduos independentes. APROVADO
+
+# 6) pacote ::performance para visualização de pressupostos de regressões
+check_model(regressao_multi) 
+check_normality(regressao_multi)
+check_heteroscedasticity(regressao_multi)
+check_collinearity(regressao_multi)
+
+```
+
+Uma boa prática ao criar modelos de regressões múltiplas é compará-los diretamente com um modelo mais simples
+```{r}
+## Modelo de comparação (NOTA_CN)
+
+modelo_controle <- lm(NOTA_CN ~ NOTA_REDACAO, colegiox)
+```
+
+### ANALISE DESCRITIVA DO MODELO MULTIPLO
+
+Avaliando p-valor:
+```{r}
+
+### Ho = coeficiente estimado sem poder explicativo : p > 0,05
+### Ha = modelo válido com coeficiente explicativo : p < 0,05
+
+summary(regressao_multi) # modelo válido com coeficiente != 0
+```
+
+Avaliando Coeficientes
+```{r}
+summary(regressao_multi) # estimate LC(1.31028) = aumento de 1 ponto em LC leva aumento de 1.31 pontos em RED
+                         # estimate CN(0.10946) = aumento de 1 ponto em CN leva aumento de 0.10 pontos em RED
+                         # estimate CH(-0.09859) = aumento de 1 ponto em CN leva queda de 0.09 pontos em RED
+                         # estimate MT(0.71201) = aumento de 1 ponto em CN leva aumento de 0.71 pontos em RED
+```
+
+Avaliando precisão (r²):
+
+```{r}
+
+summary(regressao_multi) # r-squared(0.6382) = a variação das Notas explicam 63,82% da variação das notas de Redação
+```
+
+### Comparado os modelos concorrentes
+
+Há diversas formas de comparar o desempenho de modelos. Aqui utilizamos o r² e a Análise AIC e BIC
+```{r}
+# Analise pelo maior r²adj.
+summary(modelo_controle)
+summary(regressao_multi) # maior r²
+
+# Análise AIC e BIC: representa a variância não explicada pelo modelo : menores valores apontam o melhor modelo
+AIC(regressao_multi, modelo_controle)
+BIC(regressao_multi, modelo_controle) # modelo controle melhor modelo
+```
+### Impressões Finais:
+
+De maneira geral o modelo múltiplo performa melhor que os modelos simples pelo criério do r², porém quando utilizamos as métricas AIC e BIC a comparação com o modelo de controle (NOTA_CN) desempenha melhor.
+
+Estes resultados podem ser justificados pelo conjunto de dados que utilizamos: filtramos da base original apenas as notas de um colégio aletório do Estado do Piauí, e o menor volume de dados pode gerar resultados não muito consistentes. A indicação aqui é produzir a mesma análise levando em consideração todos os dados da base original!
